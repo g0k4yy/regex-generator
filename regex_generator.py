@@ -19,14 +19,14 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         self._callbacks = callbacks
         self._helpers = callbacks.getHelpers()
         
-        callbacks.setExtensionName("Regex Generator Pro")
+        callbacks.setExtensionName("Regex Generator")
         callbacks.registerContextMenuFactory(self)
         
         # Default settings
         self.max_regex_length = self.DEFAULT_MAX_REGEX_LENGTH
         self.advanced_mode = False
         
-        print("Regex Generator Pro loaded successfully")
+        print("Regex Generator loaded successfully")
         print("Default max regex length: {}".format(self.max_regex_length))
     
     # ========================================================================
