@@ -1,4 +1,4 @@
-# Burp Suite Regex Generator Pro v2.1
+# Burp Suite Regex Generator
 
 Production-ready Burp Suite extension for generating safe, performance-optimized regex patterns from selected HTTP request/response text.
 
@@ -26,7 +26,7 @@ Production-ready Burp Suite extension for generating safe, performance-optimized
 1. Download Jython from https://www.jython.org/download
 2. Burp Suite: `Extensions` -> `Extension Settings` -> Set Python Environment to Jython JAR
 3. `Extensions` -> `Installed` -> `Add` -> Select `regex_generator_v2_refactored.py`
-4. Verify: "Regex Generator Pro loaded successfully"
+4. Verify: "Regex Generator loaded successfully"
 
 ## Usage
 
