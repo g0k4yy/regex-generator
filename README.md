@@ -1,6 +1,6 @@
 # Burp Suite Regex Generator
 
-Production-ready Burp Suite extension for generating safe, performance-optimized regex patterns from selected HTTP request/response text.
+Burp Suite extension for generating safe, performance-optimized regex patterns from selected HTTP request/response text.
 
 ## Key Features
 
