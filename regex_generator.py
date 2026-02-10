@@ -532,7 +532,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         """Show regex dialog with all pattern options"""
         
         dialog = JDialog()
-        dialog.setTitle("Regex Generator Pro")
+        dialog.setTitle("Regex Generator")
         dialog.setModal(True)
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE)
         
