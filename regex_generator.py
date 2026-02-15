@@ -116,9 +116,9 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         start = selection_bounds[0]
         end = selection_bounds[1]
         
-        # Get up to 50 characters before and after
-        context_start = max(0, start - 50)
-        context_end = min(len(message), end + 50)
+        # IMPROVED: Get up to 100 characters before and after for better HTML tag detection
+        context_start = max(0, start - 100)
+        context_end = min(len(message), end + 100)
         
         before_bytes = message[context_start:start]
         after_bytes = message[end:context_end]
@@ -164,6 +164,25 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         in_json_unquoted = prefix_pattern and re.search(r'"[\w-]+"\s*:\s*$', prefix_pattern.replace('\\', ''))
         in_html_attr = prefix_pattern and re.search(r'[\w-]+\s*=\s*"$', prefix_pattern.replace('\\', ''))
         
+        # IMPROVED: Better HTML context detection for multi-attribute scenarios
+        # Detects patterns like: name="Token" type="hidden" value="..."
+        html_multi_attr = re.search(
+            r'(<[^>]*?(?:[\w-]+\s*=\s*"[^"]*?"\s*){1,5}[\w-]+\s*=\s*")$',
+            context_before
+        )
+        
+        # IMPROVED: Detect HTML closing pattern including spaces and >
+        html_close_pattern = re.search(r'^(\s*"[^>]*?>)', context_after)
+        
+        # NEW: Enhanced JSON field detection for both quoted and unquoted values
+        # Matches: "fieldname": "value" or "fieldname": value
+        json_field_quoted = re.search(r'"([\w-]+)"\s*:\s*"$', context_before)
+        json_field_unquoted = re.search(r'"([\w-]+)"\s*:\s*$', context_before)
+        
+        # Detect JSON value endings (comma, closing brace/bracket, or newline)
+        json_value_end_quoted = re.search(r'^"(\s*[,\]\}])', context_after)
+        json_value_end_unquoted = re.search(r'^(\s*[,\]\}])', context_after)
+        
         # --- RECOMMENDED PATTERNS (Context-aware) ---
         
         # Exact with context (if context exists)
@@ -187,23 +206,82 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     'description': 'Recommended: Exact value with surrounding context'
                 })
         
-        # JSON field - any value (SAFE)
-        if in_json_quoted:
-            safe_pattern = prefix_pattern + r'([^"]{1,200})' + suffix_pattern
+        # NEW: JSON field - flexible type (string OR number/boolean) - UNIVERSAL PATTERN
+        if json_field_quoted or json_field_unquoted:
+            field_name = ""
+            if json_field_quoted:
+                field_name = json_field_quoted.group(1)
+            elif json_field_unquoted:
+                field_name = json_field_unquoted.group(1)
+            
+            # Pattern that matches BOTH quoted strings AND unquoted numbers/booleans
+            # This handles: "zh":"Samsunspor", OR "zh":1, OR "zh":true,
+            universal_pattern = '"' + field_name + r'"\s*:\s*(?:"([^"]{1,200})"|([0-9]+(?:\.[0-9]+)?|true|false|null))\s*[,\]\}]'
+            universal_pattern = self.applySafetyLimits(universal_pattern)
+            
+            if universal_pattern not in pattern_set and len(universal_pattern) <= self.max_regex_length:
+                pattern_set.add(universal_pattern)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] JSON Field - Any Type (String/Number/Boolean)',
+                    'pattern': universal_pattern,
+                    'description': 'Recommended: Captures string, number, boolean, or null values for "' + field_name + '" field'
+                })
+        
+        # JSON field - any STRING value (SAFE) - for quoted values only
+        if in_json_quoted or json_field_quoted:
+            field_name = ""
+            if json_field_quoted:
+                field_name = json_field_quoted.group(1)
+                safe_pattern = '"' + field_name + r'"\s*:\s*"([^"]{1,200})"'
+            else:
+                safe_pattern = prefix_pattern + r'([^"]{1,200})' + suffix_pattern
+            
             safe_pattern = self.applySafetyLimits(safe_pattern)
             
             if safe_pattern not in pattern_set and len(safe_pattern) <= self.max_regex_length:
                 pattern_set.add(safe_pattern)
                 variations.append({
                     'category': 'recommended',
-                    'name': '[RECOMMENDED] JSON Field - Any Value',
+                    'name': '[RECOMMENDED] JSON Field - String Value Only',
                     'pattern': safe_pattern,
-                    'description': 'Recommended: Captures any value in this JSON field (safe)'
+                    'description': 'Recommended: Captures only string values (quoted) in this JSON field'
                 })
         
-        # HTML attribute - any value (SAFE)
-        elif in_html_attr:
-            safe_pattern = prefix_pattern + r'([^"\']{1,200})' + suffix_pattern
+        # NEW: JSON field - number/boolean value only (for unquoted values)
+        if json_field_unquoted:
+            field_name = json_field_unquoted.group(1)
+            number_pattern = '"' + field_name + r'"\s*:\s*([0-9]+(?:\.[0-9]+)?|true|false|null)\s*[,\]\}]'
+            number_pattern = self.applySafetyLimits(number_pattern)
+            
+            if number_pattern not in pattern_set and len(number_pattern) <= self.max_regex_length:
+                pattern_set.add(number_pattern)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] JSON Field - Number/Boolean Only',
+                    'pattern': number_pattern,
+                    'description': 'Recommended: Captures only number, boolean, or null values for "' + field_name + '" field'
+                })
+        
+        # HTML attribute - any value (SAFE) - IMPROVED VERSION
+        if in_html_attr or html_multi_attr:
+            # Use the multi-attribute pattern if available, otherwise fall back to simple
+            if html_multi_attr:
+                html_prefix = html_multi_attr.group(1)
+                # Escape the HTML prefix properly
+                html_prefix_escaped = re.escape(html_prefix)
+            else:
+                html_prefix_escaped = prefix_pattern
+            
+            # Get proper suffix
+            if html_close_pattern:
+                html_suffix_escaped = re.escape(html_close_pattern.group(1))
+            elif suffix_pattern:
+                html_suffix_escaped = suffix_pattern
+            else:
+                html_suffix_escaped = re.escape('" />')
+            
+            safe_pattern = html_prefix_escaped + r'([^"\']{1,200})' + html_suffix_escaped
             safe_pattern = self.applySafetyLimits(safe_pattern)
             
             if safe_pattern not in pattern_set and len(safe_pattern) <= self.max_regex_length:
@@ -212,8 +290,23 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     'category': 'recommended',
                     'name': '[RECOMMENDED] HTML Attribute - Any Value',
                     'pattern': safe_pattern,
-                    'description': 'Recommended: Captures any value in this attribute (safe)'
+                    'description': 'Recommended: Captures any value in this HTML attribute (safe)'
                 })
+            
+            # ADDITIONAL: Add a more specific multi-attribute pattern with exact value
+            if html_multi_attr:
+                escaped_text = re.escape(text)
+                exact_html_pattern = html_prefix_escaped + '(' + escaped_text + ')' + html_suffix_escaped
+                exact_html_pattern = self.applySafetyLimits(exact_html_pattern)
+                
+                if exact_html_pattern not in pattern_set and len(exact_html_pattern) <= self.max_regex_length:
+                    pattern_set.add(exact_html_pattern)
+                    variations.append({
+                        'category': 'recommended',
+                        'name': '[RECOMMENDED] HTML Multi-Attr - Exact Value',
+                        'pattern': exact_html_pattern,
+                        'description': 'Recommended: Exact value with multiple HTML attributes as context'
+                    })
         
         # --- TYPE-BASED PATTERNS ---
         
