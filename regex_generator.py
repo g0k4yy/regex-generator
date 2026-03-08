@@ -183,6 +183,33 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         json_value_end_quoted = re.search(r'^"(\s*[,\]\}])', context_after)
         json_value_end_unquoted = re.search(r'^(\s*[,\]\}])', context_after)
         
+        # NEW: URL parameter detection (GET/POST parameters in URLs)
+        # Matches: ?param=value or &param=value
+        url_param_context = re.search(r'[?&]([A-Za-z0-9_-]+)=$', context_before)
+        # Check if we're in a URL path context (look for GET, POST, or URL-like structure)
+        in_url_context = bool(re.search(r'(?:GET|POST|PUT|DELETE|PATCH)\s+[^\s]*[?&]', context_before, re.IGNORECASE) or 
+                             re.search(r'https?://[^\s]*[?&]', context_before, re.IGNORECASE) or
+                             re.search(r'/[^\s]*[?&]', context_before))
+        
+        # NEW: Cookie context detection - HIGH PRIORITY
+        # Matches: Set-Cookie: COOKIENAME=value or Cookie: COOKIENAME=value
+        # IMPORTANT: Only match if we have explicit Cookie header context
+        cookie_header_context = re.search(r'(?:Set-)?Cookie:\s+([A-Za-z0-9_-]+)=$', context_before, re.IGNORECASE)
+        
+        # Simple NAME= pattern - but we need to verify it's NOT a URL parameter
+        simple_name_value = re.search(r'([A-Za-z0-9_-]+)=$', context_before)
+        
+        # Detect cookie value ending (semicolon or space before next attribute)
+        # Cookies typically end with ; followed by attributes
+        cookie_value_end = re.search(r'^([;\s])', context_after)
+        
+        # Determine if simple_name_value is a cookie or URL param
+        # It's a cookie if:
+        # 1. We have explicit Cookie header, OR
+        # 2. We have NAME= pattern + semicolon ending AND we're NOT in URL context
+        is_cookie_context = bool(cookie_header_context or 
+                                (simple_name_value and cookie_value_end and not in_url_context and not url_param_context))
+        
         # --- RECOMMENDED PATTERNS (Context-aware) ---
         
         # Exact with context (if context exists)
@@ -205,6 +232,113 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     'pattern': context_regex,
                     'description': 'Recommended: Exact value with surrounding context'
                 })
+        
+        # NEW: URL Parameter patterns - HIGH PRIORITY
+        if url_param_context and in_url_context:
+            param_name = url_param_context.group(1)
+            
+            # Pattern 1: URL Parameter - Any value
+            url_param_any = param_name + r'=([^&\s]{1,200})'
+            url_param_any = self.applySafetyLimits(url_param_any)
+            
+            if url_param_any not in pattern_set and len(url_param_any) <= self.max_regex_length:
+                pattern_set.add(url_param_any)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] URL Parameter - Any Value',
+                    'pattern': url_param_any,
+                    'description': 'Recommended: Captures any value for "' + param_name + '" URL parameter'
+                })
+            
+            # Pattern 2: URL Parameter with query string context
+            url_param_context_pattern = r'[?&]' + param_name + r'=([^&\s]{1,200})'
+            url_param_context_pattern = self.applySafetyLimits(url_param_context_pattern)
+            
+            if url_param_context_pattern not in pattern_set and len(url_param_context_pattern) <= self.max_regex_length:
+                pattern_set.add(url_param_context_pattern)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] URL Parameter - With Query Context',
+                    'pattern': url_param_context_pattern,
+                    'description': 'Recommended: Captures "' + param_name + '" parameter from URL query string'
+                })
+            
+            # Pattern 3: URL Parameter - Exact value
+            escaped_text = re.escape(text)
+            url_param_exact = param_name + r'=(' + escaped_text + r')'
+            url_param_exact = self.applySafetyLimits(url_param_exact)
+            
+            if url_param_exact not in pattern_set and len(url_param_exact) <= self.max_regex_length:
+                pattern_set.add(url_param_exact)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] URL Parameter - Exact Value',
+                    'pattern': url_param_exact,
+                    'description': 'Recommended: Captures exact value for "' + param_name + '" URL parameter'
+                })
+        
+        # NEW: Cookie patterns - HIGH PRIORITY (only if not URL parameter)
+        elif is_cookie_context:
+            cookie_name = ""
+            if cookie_header_context:
+                cookie_name = cookie_header_context.group(1)
+            elif simple_name_value:
+                cookie_name = simple_name_value.group(1)
+            
+            # Pattern 1: Cookie - Any value (most common use case)
+            cookie_any_pattern = cookie_name + r'=([^;\s]{1,200})'
+            cookie_any_pattern = self.applySafetyLimits(cookie_any_pattern)
+            
+            if cookie_any_pattern not in pattern_set and len(cookie_any_pattern) <= self.max_regex_length:
+                pattern_set.add(cookie_any_pattern)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] Cookie - Any Value',
+                    'pattern': cookie_any_pattern,
+                    'description': 'Recommended: Captures any value for "' + cookie_name + '" cookie'
+                })
+            
+            # Pattern 2: Cookie with Set-Cookie header context
+            if cookie_header_context:
+                setcookie_pattern = r'Set-Cookie:\s+' + cookie_name + r'=([^;\s]{1,200})'
+                setcookie_pattern = self.applySafetyLimits(setcookie_pattern)
+                
+                if setcookie_pattern not in pattern_set and len(setcookie_pattern) <= self.max_regex_length:
+                    pattern_set.add(setcookie_pattern)
+                    variations.append({
+                        'category': 'recommended',
+                        'name': '[RECOMMENDED] Set-Cookie Header - Any Value',
+                        'pattern': setcookie_pattern,
+                        'description': 'Recommended: Captures "' + cookie_name + '" cookie value from Set-Cookie header'
+                    })
+            
+            # Pattern 3: Cookie - Exact value
+            escaped_text = re.escape(text)
+            cookie_exact_pattern = cookie_name + r'=(' + escaped_text + r')'
+            cookie_exact_pattern = self.applySafetyLimits(cookie_exact_pattern)
+            
+            if cookie_exact_pattern not in pattern_set and len(cookie_exact_pattern) <= self.max_regex_length:
+                pattern_set.add(cookie_exact_pattern)
+                variations.append({
+                    'category': 'recommended',
+                    'name': '[RECOMMENDED] Cookie - Exact Value',
+                    'pattern': cookie_exact_pattern,
+                    'description': 'Recommended: Captures exact value for "' + cookie_name + '" cookie'
+                })
+            
+            # Pattern 4: Cookie - Alphanumeric/hex pattern (for tokens/session IDs)
+            if text.replace('-', '').replace('_', '').isalnum():
+                cookie_alphanum_pattern = cookie_name + r'=([\w\-]{1,200})'
+                cookie_alphanum_pattern = self.applySafetyLimits(cookie_alphanum_pattern)
+                
+                if cookie_alphanum_pattern not in pattern_set and len(cookie_alphanum_pattern) <= self.max_regex_length:
+                    pattern_set.add(cookie_alphanum_pattern)
+                    variations.append({
+                        'category': 'recommended',
+                        'name': '[RECOMMENDED] Cookie - Alphanumeric Value',
+                        'pattern': cookie_alphanum_pattern,
+                        'description': 'Recommended: Captures alphanumeric values for "' + cookie_name + '" cookie'
+                    })
         
         # NEW: JSON field - flexible type (string OR number/boolean) - UNIVERSAL PATTERN
         if json_field_quoted or json_field_unquoted:
